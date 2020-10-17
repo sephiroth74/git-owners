@@ -2,9 +2,11 @@
 
 A simple utility to pretty print the list of files in a git repo and their owners.
 
+[![PyPI version](https://badge.fury.io/py/git-owners@2x.png)](https://badge.fury.io/py/git-owners)
+
 ## Installation
 
-python3 -m pip install -i https://test.pypi.org/simple/ git-owners==0.0.2 
+`python3 -m pip install git-owners` 
 
 ## Usage
 
