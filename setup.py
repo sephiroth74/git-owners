@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name='git-owners',
-    version='0.0.2',
+    version='0.0.3',
     scripts=['src/git-owners'],
     author="Alessandro Crugnola",
     author_email="alessandro.crugnola@gmail.com",

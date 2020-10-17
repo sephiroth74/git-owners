@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import enum
 import os
+import shutil
 import sys
 import random
 import re
@@ -27,10 +28,10 @@ from treelib import Tree
 assert sys.version_info >= (3, 6, 0), "Python 3.6+ required"
 
 __all__ = ['git_owners']
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 __author__ = "Alessandro Crugnola"
 
-pattern = re.compile("author-mail <([^>]*)>")
+BLAME_AUTHOR_EMAIL_PATTERN = re.compile("^author-mail <([^>]*)>")
 
 random.seed()
 
@@ -253,20 +254,20 @@ def process_tree_leaf(repo: git.Repo, path: Path, since: Optional[str]) -> Stats
     :param since:
     :return:
     """
+    git_path = shutil.which('git')
     since_arg = f" --since={since} " if since else " "
-    git_blame = f"git -C {repo.working_dir} blame{since_arg}-w -M -C -C --line-porcelain -- {path}"
+    git_blame = f"{git_path} -C {repo.working_dir} blame{since_arg}-w -M -C -C --line-porcelain -- {path}"
     proc1 = subprocess.Popen(git_blame.split(' '), stdout=subprocess.PIPE)
-    proc2 = subprocess.Popen(['grep', '-I', '^author-mail '], stdin=proc1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc1.stdout.close()  # Allow proc1 to receive a SIGPIPE if proc2 exits.
-    out, err = proc2.communicate()
+    out, err = proc1.communicate()
     count = dict()
     for line in out.decode().splitlines():
-        match = re.match(pattern, line)
-        email = match.group(1)
-        if email not in count:
-            count[email] = 1
-        else:
-            count[email] += 1
+        match = re.match(BLAME_AUTHOR_EMAIL_PATTERN, line)
+        if match:
+            email = match.group(1).lower()
+            if email not in count:
+                count[email] = 1
+            else:
+                count[email] += 1
     return Stats(path.name, count)
 
 
