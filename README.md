@@ -1,4 +1,4 @@
-# Git-Owner
+# git-owners
 
 A simple utility to pretty print the list of files in a git repo and their owners.<br />
 https://pypi.org/project/git-owners/0.0.2/
