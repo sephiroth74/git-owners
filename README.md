@@ -1,6 +1,7 @@
 # Git-Owner
 
-A simple utility to pretty print the list of files in a git repo and their owners.
+A simple utility to pretty print the list of files in a git repo and their owners.<br />
+https://pypi.org/project/git-owners/0.0.2/
 
 [![PyPI version](https://badge.fury.io/py/git-owners@2x.png)](https://badge.fury.io/py/git-owners)
 
@@ -186,3 +187,8 @@ Percent    Author                           Lines    Total Lines
 7.5%       crugnola@adobe.com                 604           8019
 0.0%       not.committed.yet                    1           8019
 </pre>
+
+
+## License
+
+See the [MIT License](LICENSE)
