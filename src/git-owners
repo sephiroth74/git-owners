@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# Alessandro Crugnola - alessandro.crugnola@gmail.com
+# Small python utility to print dir/file owners from a git repo
+
+
+from __future__ import annotations
+
+import argparse
+import enum
+import os
+import sys
+import random
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import List, Dict, Optional
+
+import git
+import tabulate
+from progress.bar import IncrementalBar
+from termcolor import colored
+from treelib import Tree
+
+try:
+    from _version import version as __version__
+except ImportError:
+    __version__ = "0.0.1"
+
+assert sys.version_info >= (3, 6, 0), "Python 3.6+ required"
+
+__all__ = ['git_owners']
+
+pattern = re.compile("author-mail <([^>]*)>")
+random.seed()
+
+perc_colors = {
+    'green': 33,
+    'blue': 25,
+    'yellow': 16,
+    'grey': 0
+}
+
+
+class OutputFilter(enum.Enum):
+    FILE = 'file'
+    DIR = 'dir'
+    MIXED = 'mixed'
+
+    @staticmethod
+    def value_of(string: str) -> Optional[OutputFilter]:
+        for item in list(OutputFilter):
+            if item.value == string:
+                return item
+        return None
+
+
+class Stats(object):
+    """
+    Object passed to each Node of the generated Tree
+    """
+
+    def __init__(self, name: str, data: Optional[Dict[str, int]] = None):
+        self._name = name
+        if data:
+            self._raw_data = data
+        else:
+            self._raw_data = dict()
+
+    def add_all(self, other: Stats):
+        for k, v in other._raw_data.items():
+            if k not in self._raw_data:
+                self._raw_data[k] = 0
+            self._raw_data[k] += v
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def first_raw(self) -> str:
+        sort_orders = self._sorted()
+        if sort_orders:
+            total_lines = sum(x[1] for x in sort_orders)
+            author, files = sort_orders[0]
+            perc = files / total_lines * 100
+            string = "%.1f%%|%s|%s|%s" % (perc, author, files, total_lines)
+            return f"{self.name}|{string}"
+        else:
+            return f"{self.name}|N/A|N/A|N/A|N/A"
+
+    @property
+    def full_stats(self) -> List[Dict]:
+        sort_orders = self._sorted()
+        total_lines = sum(x[1] for x in sort_orders)
+        result = []
+        if sort_orders:
+            for index in range(0, len(sort_orders)):
+                line = sort_orders[index]
+                name, files = line
+                perc = files / total_lines * 100
+
+                single = {
+                    'author': name,
+                    'perc': perc,
+                    'lines': files,
+                    'total': total_lines
+                }
+
+                result.append(single)
+        else:
+            result.append({'author': 'N/A', 'perc': 0, 'lines': 0, 'total': total_lines})
+        return result
+
+    def _sorted(self):
+        return sorted(self._raw_data.items(), key=lambda x: x[1], reverse=True)
+
+    @staticmethod
+    def get_color(value: float):
+        for k, v in perc_colors.items():
+            if value >= float(v) + 0.1:
+                return k
+
+
+def make_table(headers: List[str], data: List[List[str]]):
+    """
+    Simple function to generate a table like report.
+    :param headers:     table headers
+    :type data: object  table data
+    """
+    extra_padding = 4
+    half_padding = int(extra_padding / 2)
+    sizes = list(len(x) + extra_padding for x in headers)
+    length = len(sizes)
+
+    for line in data:
+        for i in range(0, len(line)):
+            string = line[i]
+            sizes[i] = max(len(string) + extra_padding, sizes[i])
+
+    buffer = ''
+
+    # print headers
+    for i in range(0, length):
+        buffer += headers[i].ljust(sizes[i])
+
+    buffer += '\n'
+
+    for i in range(0, length):
+        buffer += '-' * (sizes[i] - half_padding) + (' ' * half_padding)
+
+    buffer += '\n'
+
+    for line in data:
+        for i in range(0, len(line)):
+            string = line[i]
+            buffer += string.ljust(sizes[i])
+        buffer += '\n'
+
+    return buffer
+
+
+def add_to_tree(tree: Tree, path: Path):
+    final_path = Path('')
+    for i in range(0, len(path.parts)):
+        final_path = final_path / path.parts[i]
+        name = path.parts[i]
+        if i == 0:
+            parent = Path('.')
+        else:
+            parent = final_path.parent
+        if not tree.contains(final_path):
+            tree.create_node(name, final_path, parent)
+
+
+def list_paths(root_tree, path: Path):
+    for blob in root_tree.blobs:
+        yield path / blob.name
+    for tree in root_tree.trees:
+        yield from list_paths(tree, path / tree.name)
+
+
+def make_tree(root_tree: git.objects.Tree, root_dir: Path, include: Optional[str] = None) -> Tree:
+    tree = Tree()
+    tree.create_node(root_dir.name, Path('.'))
+
+    if include is not None and len(include) > 0:
+        extensions = list(map(lambda x: x.strip(), include.split(',')))
+    else:
+        extensions = []
+
+    for path in list_paths(root_tree, root_dir):
+        if extensions:
+            if path.suffix not in extensions:
+                continue
+        relative_path = path.relative_to(root_dir)
+        add_to_tree(tree, relative_path)
+    return tree
+
+
+def process_tree(repo: git.Repo, tree: Tree, path: Path, since: Optional[str]) -> Stats:
+    """
+    Given the generated tree, this function will fill each node with the authors statistics
+    :param repo:
+    :param tree:
+    :param path:
+    :param since:
+    :return:
+    """
+    total_files = len(list(filter(lambda x: x.is_leaf(), tree.leaves(path))))
+
+    print(f"Generating stats for {repo.working_dir / path} with {total_files} files")
+    bar = IncrementalBar('Progress', max=total_files,
+                         suffix='%(percent)d%% [%(elapsed_td)s / %(eta_td)s]')
+    result = process_tree_node(repo, tree, path, bar, since, [0, total_files])
+    bar.finish()
+    return result
+
+
+def process_tree_node(repo: git.Repo, tree: Tree, path: Path, bar: IncrementalBar, since: Optional[str],
+                      counter: List[int]) -> Stats:
+    """
+    Process a single node of the tree, to create the authors statistics, and all its subnodes
+    :param repo:
+    :param tree:
+    :param path:
+    :param bar:
+    :param since:
+    :param counter:
+    :return:
+    """
+    node = tree.get_node(path)
+    children = tree.children(path)
+
+    if len(children) > 0:
+        result = Stats(path.name)
+        for child in children:
+            tree_result = process_tree_node(repo, tree, child.identifier, bar, since, counter)
+            result.add_all(tree_result)
+    else:
+        bar.next(0)
+        result = process_tree_leaf(repo, node.identifier, since)
+        bar.next()
+        counter[0] += 1
+    node.data = result
+    return result
+
+
+def process_tree_leaf(repo: git.Repo, path: Path, since: Optional[str]) -> Stats:
+    """
+    Process the node leaf (file). Invoke git blame to obtain the required informations.
+    :param repo:
+    :param path:
+    :param since:
+    :return:
+    """
+    since_arg = f" --since={since} " if since else " "
+    git_blame = f"git -C {repo.working_dir} blame{since_arg}-w -M -C -C --line-porcelain -- {path}"
+    proc1 = subprocess.Popen(git_blame.split(' '), stdout=subprocess.PIPE)
+    proc2 = subprocess.Popen(['grep', '-I', '^author-mail '], stdin=proc1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc1.stdout.close()  # Allow proc1 to receive a SIGPIPE if proc2 exits.
+    out, err = proc2.communicate()
+    count = dict()
+    for line in out.decode().splitlines():
+        match = re.match(pattern, line)
+        email = match.group(1)
+        if email not in count:
+            count[email] = 1
+        else:
+            count[email] += 1
+    return Stats(path.name, count)
+
+
+def create_report(tree: Tree, target_dir: Path, depth: int, output_filter: OutputFilter, as_list: bool, use_colors: bool) -> str:
+    """
+    Create the final report for the given arguments
+    :param tree:
+    :param target_dir:
+    :param depth:
+    :param output_filter:
+    :param as_list:
+    :param use_colors:
+    :return:
+    """
+    buffer = ''
+
+    # filter result tree by arguments
+    subtree: Tree = tree.subtree(nid=target_dir)
+    if output_filter == OutputFilter.DIR:
+        for node in list(subtree.filter_nodes(lambda x: x.is_leaf())):
+            if subtree.contains(node.identifier):
+                subtree.remove_node(node.identifier)
+
+    if depth > -1:
+        for node in list(subtree.filter_nodes(lambda x: subtree.depth(x) > depth)):
+            if subtree.contains(node.identifier):
+                subtree.remove_node(node.identifier)
+
+    buffer += '\nDirectory Structure Statistics:\n'
+
+    if as_list:
+        # get the tree result
+        root_node = subtree.get_node(subtree.root)
+        root_dir = root_node.identifier
+        table = []
+        for identifier in subtree.nodes:
+            node = subtree.get_node(identifier)
+            if output_filter == OutputFilter.FILE:
+                if not node.is_leaf():
+                    continue
+            full_stats = node.data.full_stats[0]
+            table.append([
+                str(node.identifier.relative_to(root_dir)),
+                ('%.1f%%' % full_stats['perc']),
+                (str(full_stats['author'])),
+                (str(full_stats['lines'])),
+                (str(full_stats['total'])),
+            ])
+        buffer += make_table(headers=["Directory/File", "Perc", "Owner", "Lines", "Total Lines"], data=table)
+        buffer += "\n"
+
+    else:
+        # get the tree result
+
+        def transform(line_str: str):
+            tree_string, perc, owner, lines, total_lines = line_str.split("|")
+            return [tree_string, perc.strip(), owner.strip(), lines.strip(), total_lines.strip()]
+
+        result = map(lambda x: transform(x), subtree.show(data_property="first_raw", idhidden=True, stdout=False).splitlines())
+        buffer += make_table(headers=["Directory/File", "Percent", "Owner", "Lines", "Total Lines"], data=list(result))
+        buffer += '\n'
+
+    # final stats
+
+    buffer += '\nAccumulated Statistics:\n'
+
+    table = []
+    node = subtree.get_node(subtree.root)
+    full_stats = node.data.full_stats
+    for i in range(0, len(full_stats)):
+        line = full_stats[i]
+        keys = list(perc_colors.keys())
+        color = keys[i] if i < len(keys) else keys[-1]
+        table.append([
+            colored('%.1f%%' % line['perc'], color) if use_colors else '%.1f%%' % line['perc'],
+            colored(line['author'], color) if use_colors else line['author'],
+            colored(str(line['lines']), color) if use_colors else line['lines'],
+            colored(str(line['total']), color) if use_colors else line['total'],
+        ])
+
+    buffer += tabulate.tabulate(table, headers=["Percent", "Author", "Lines", "Total Lines"])
+    buffer += '\n'
+    return buffer
+
+
+# noinspection PyShadowingNames
+def execute(repo_dir: Path, target_dir: Path, args: argparse.Namespace):
+    """
+    Execute the input arguments and generates the final report
+
+    :param repo_dir:    git repository root directory
+    :param target_dir:  optional path of the repository to parse (relative to repo_dir)
+    :param args:        input arguments
+    """
+    output = args.output
+
+    g = git.Repo(repo_dir)
+    tree = make_tree(g.head.commit.tree, target_dir, args.include_extensions)
+    subtree = tree.subtree(nid=target_dir)
+    leaves = len(list(subtree.filter_nodes(lambda x: x.is_leaf())))
+
+    process_tree(g, tree, target_dir, args.since)
+    print()
+
+    report = f'Final Report for `{repo_dir}`\n\n'
+    report += f'Command line: `{" ".join(sys.argv)}`\n\n'
+
+    report += create_report(tree, target_dir, args.depth, args.filter, args.as_list, output is None)
+    report += '\n'
+
+    if output:
+        with open(output, 'w') as fp:
+            fp.write(report)
+        print(f'Saved report to {output}')
+    else:
+        print(report)
+
+
+def git_owners():
+    if len(sys.argv) == 2 and sys.argv[1] == '--version':
+        print(__version__)
+        sys.exit(0)
+
+    parser = argparse.ArgumentParser(description='Print author owners statistics for a given git repo')
+
+    parser.add_argument('-p', '--path', dest='path', default=None,
+                        help='Directory to process (Relative to repository root)')
+
+    parser.add_argument('-d', '--depth', type=int, default=-1,
+                        help='Maximum level of directory leaves to print out in the final tree (-1 to print all leaves)')
+
+    parser.add_argument('-f', '--filter', type=str,
+                        choices=[OutputFilter.FILE.value, OutputFilter.DIR.value, OutputFilter.MIXED.value],
+                        default=OutputFilter.MIXED.value,
+                        help=f"""Filter the output based on the value given.
+                        {OutputFilter.FILE.value}: output files only (--as-list will be used in this case), 
+                        {OutputFilter.DIR.value}: output directories only, 
+                        {OutputFilter.MIXED.value}: output files and directories (default).""")
+
+    parser.add_argument('--as-list', action='store_true', default=False,
+                        help='Print results as a list instead of a tree. If --filter is not specified, mixed will be used.')
+
+    parser.add_argument('-s', '--since', default=None,
+                        help='Specifies the date range limit to use when executing git blame. date format is the same as used for '
+                             'git blame --since')
+
+    parser.add_argument('--include-extensions', type=str, default=None,
+                        help="Comma separated extensions (ie. .py, .kt, .java). Specifies which file extensions to include while "
+                             "parsing the repository")
+
+    parser.add_argument('-o', '--output', required=False, default=None,
+                        help='Save Report to file instead of printing to stdout')
+
+    parser.add_argument('repo', help='Repository root')
+
+    args = parser.parse_args()
+
+    repo_dir = Path(args.repo)
+
+    if args.path is not None:
+        target_dir = Path(args.path)
+    else:
+        target_dir = Path('.')
+
+    args.filter = OutputFilter.value_of(args.filter)
+
+    if args.filter == OutputFilter.FILE:
+        args.as_list = True
+
+    execute(repo_dir, target_dir, args)
+
+
+if __name__ == "__main__":
+    git_owners()
