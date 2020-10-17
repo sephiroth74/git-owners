@@ -21,7 +21,6 @@ from tqdm import tqdm
 
 import git
 import tabulate
-# from progress.bar import IncrementalBar
 from termcolor import colored
 from treelib import Tree
 
@@ -207,27 +206,28 @@ def process_tree(repo: git.Repo, tree: Tree, path: Path, since: Optional[str]) -
     total_files = len(list(filter(lambda x: x.is_leaf(), tree.leaves(path))))
 
     print(f"Generating stats for {repo.working_dir / path} with {total_files} files")
-    # bar = IncrementalBar('Progress', max=total_files,
-    #                      suffix='%(percent)d%% [%(elapsed_td)s / %(eta_td)s]')
 
     progress = tqdm(total=total_files, desc="Overall Progress")
-
     result = process_tree_node(repo, tree, path, progress, since, [0, total_files])
     progress.close()
     return result
 
 
-def process_tree_node(repo: git.Repo, tree: Tree, path: Path, progress: tqdm, since: Optional[str],
+def process_tree_node(repo: git.Repo,
+                      tree: Tree,
+                      path: Path,
+                      progress: tqdm,
+                      since: Optional[str],
                       counter: List[int]) -> Stats:
     """
-    Process a single node of the tree, to create the authors statistics, and all its subnodes
-    :param repo:
-    :param tree:
-    :param path:
-    :param progress:
-    :param since:
-    :param counter:
-    :return:
+    Process a single node of the tree, to create the authors statistics, and all its sub nodes
+    :param repo:        a reference to the global repository
+    :param tree:        a reference to the global tree instance
+    :param path:        the repo relative path to process
+    :param progress:    a reference to the tdqm progress bar
+    :param since:       optional. if specified it will be used as argument (--since) for git blame
+    :param counter:     a reference to the current progress/total processed files
+    :return:            the generated final stats
     """
     node = tree.get_node(path)
     children = tree.children(path)
