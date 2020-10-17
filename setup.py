@@ -6,11 +6,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name='git-owners',
-    use_scm_version={
-        "write_to": "src/_version.py",
-        "write_to_template": 'version = "{version}"\n',
-    },
-    version='0.0.1',
+    version='0.0.2',
     scripts=['src/git-owners'],
     author="Alessandro Crugnola",
     author_email="alessandro.crugnola@gmail.com",

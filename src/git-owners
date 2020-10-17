@@ -17,31 +17,26 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Dict, Optional
+from tqdm import tqdm
 
 import git
 import tabulate
-from progress.bar import IncrementalBar
+# from progress.bar import IncrementalBar
 from termcolor import colored
 from treelib import Tree
-
-try:
-    from _version import version as __version__
-except ImportError:
-    __version__ = "0.0.1"
 
 assert sys.version_info >= (3, 6, 0), "Python 3.6+ required"
 
 __all__ = ['git_owners']
+__version__ = "0.0.2"
+__author__ = "Alessandro Crugnola"
 
 pattern = re.compile("author-mail <([^>]*)>")
+
 random.seed()
 
-perc_colors = {
-    'green': 33,
-    'blue': 25,
-    'yellow': 16,
-    'grey': 0
-}
+# Color by percentage of code owned by a single author
+COLORS_DICT: Dict[str, int] = {'green': 33, 'blue': 25, 'yellow': 16, 'grey': 0}
 
 
 class OutputFilter(enum.Enum):
@@ -119,7 +114,7 @@ class Stats(object):
 
     @staticmethod
     def get_color(value: float):
-        for k, v in perc_colors.items():
+        for k, v in COLORS_DICT.items():
             if value >= float(v) + 0.1:
                 return k
 
@@ -212,21 +207,24 @@ def process_tree(repo: git.Repo, tree: Tree, path: Path, since: Optional[str]) -
     total_files = len(list(filter(lambda x: x.is_leaf(), tree.leaves(path))))
 
     print(f"Generating stats for {repo.working_dir / path} with {total_files} files")
-    bar = IncrementalBar('Progress', max=total_files,
-                         suffix='%(percent)d%% [%(elapsed_td)s / %(eta_td)s]')
-    result = process_tree_node(repo, tree, path, bar, since, [0, total_files])
-    bar.finish()
+    # bar = IncrementalBar('Progress', max=total_files,
+    #                      suffix='%(percent)d%% [%(elapsed_td)s / %(eta_td)s]')
+
+    progress = tqdm(total=total_files, desc="Overall Progress")
+
+    result = process_tree_node(repo, tree, path, progress, since, [0, total_files])
+    progress.close()
     return result
 
 
-def process_tree_node(repo: git.Repo, tree: Tree, path: Path, bar: IncrementalBar, since: Optional[str],
+def process_tree_node(repo: git.Repo, tree: Tree, path: Path, progress: tqdm, since: Optional[str],
                       counter: List[int]) -> Stats:
     """
     Process a single node of the tree, to create the authors statistics, and all its subnodes
     :param repo:
     :param tree:
     :param path:
-    :param bar:
+    :param progress:
     :param since:
     :param counter:
     :return:
@@ -237,12 +235,11 @@ def process_tree_node(repo: git.Repo, tree: Tree, path: Path, bar: IncrementalBa
     if len(children) > 0:
         result = Stats(path.name)
         for child in children:
-            tree_result = process_tree_node(repo, tree, child.identifier, bar, since, counter)
+            tree_result = process_tree_node(repo, tree, child.identifier, progress, since, counter)
             result.add_all(tree_result)
     else:
-        bar.next(0)
         result = process_tree_leaf(repo, node.identifier, since)
-        bar.next()
+        progress.update(1)
         counter[0] += 1
     node.data = result
     return result
@@ -341,7 +338,7 @@ def create_report(tree: Tree, target_dir: Path, depth: int, output_filter: Outpu
     full_stats = node.data.full_stats
     for i in range(0, len(full_stats)):
         line = full_stats[i]
-        keys = list(perc_colors.keys())
+        keys = list(COLORS_DICT.keys())
         color = keys[i] if i < len(keys) else keys[-1]
         table.append([
             colored('%.1f%%' % line['perc'], color) if use_colors else '%.1f%%' % line['perc'],
