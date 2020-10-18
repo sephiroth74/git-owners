@@ -1,0 +1,5 @@
+termcolor==1.1.0
+tqdm==4.50.2
+tabulate==0.8.7
+treelib==1.6.1
+GitPython==3.1.9

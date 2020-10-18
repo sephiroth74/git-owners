@@ -9,26 +9,25 @@ from __future__ import annotations
 
 import argparse
 import enum
-import os
-import shutil
-import sys
+import logging
 import random
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Dict, Optional
-from tqdm import tqdm
+from typing import Dict, List, Optional
 
 import git
 import tabulate
 from termcolor import colored
+from tqdm import tqdm
 from treelib import Tree
 
-assert sys.version_info >= (3, 6, 0), "Python 3.6+ required"
+assert sys.version_info >= (3, 8, 0), "Python 3.6+ required"
 
 __all__ = ['git_owners']
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 __author__ = "Alessandro Crugnola"
 
 BLAME_AUTHOR_EMAIL_PATTERN = re.compile("^author-mail <([^>]*)>")
@@ -157,16 +156,36 @@ def make_table(headers: List[str], data: List[List[str]]):
     return buffer
 
 
-def add_to_tree(tree: Tree, path: Path):
-    final_path = Path('')
+def is_binary_file(path: Path) -> bool:
+    """
+    Test if a file is binary
+    :param path:
+    :return:
+    """
+
+    if not path.exists():
+        return False
+    try:
+        with open(path.absolute(), 'r', encoding='utf-8') as f:
+            f.read(1)
+            return False
+    except UnicodeError:
+        return True
+
+
+def add_to_tree(tree: Tree, path: Path, root_dir: Path):
+    logging.info(f"add_to_tree(path={path}, root_dir={root_dir})")
+    final_path = root_dir
     for i in range(0, len(path.parts)):
         final_path = final_path / path.parts[i]
         name = path.parts[i]
         if i == 0:
-            parent = Path('.')
+            parent = root_dir
         else:
             parent = final_path.parent
+        logging.debug(f"final_path={final_path}, parent={parent}")
         if not tree.contains(final_path):
+            logging.debug(f"create_node(name={name}, identifier={final_path})")
             tree.create_node(name, final_path, parent)
 
 
@@ -177,21 +196,50 @@ def list_paths(root_tree, path: Path):
         yield from list_paths(tree, path / tree.name)
 
 
-def make_tree(root_tree: git.objects.Tree, root_dir: Path, include: Optional[str] = None) -> Tree:
-    tree = Tree()
-    tree.create_node(root_dir.name, Path('.'))
+def get_git_tree(root_tree: git.objects.Tree, target_dir: Path) -> Optional[git.objects.Tree]:
+    logging.info(f'get_git_tree({root_tree.abspath}, {str(target_dir)})')
+    try:
+        return root_tree.join(str(target_dir))
+    except KeyError:
+        return None
 
-    if include is not None and len(include) > 0:
-        extensions = list(map(lambda x: x.strip(), include.split(',')))
-    else:
-        extensions = []
+
+def make_tree(root_tree: git.objects.Tree,
+              root_dir: Path,
+              include_extensions: Optional[List[str]] = None,
+              exclude_extensions: Optional[List[str]] = None) -> Tree:
+    """
+    Generate the tree from the repository
+    :param root_tree:
+    :param root_dir:
+    :param include_extensions:
+    :param exclude_extensions:
+    :return:
+    """
+
+    logging.info(f"make_tree(root_dir={root_dir}, include_extensions={include_extensions}, exclude_extensions={exclude_extensions})")
+    logging.debug(f"root_dir.name={root_dir.name}, root_dir.asbolute={root_dir.absolute()}, root_dir.str={str(root_dir)}")
+
+    tree = Tree()
+    tree.create_node(root_dir.name, root_dir)
+
+    if str(root_dir) != '.':
+        root_tree = get_git_tree(root_tree, root_dir)
+
+    if root_tree is None:
+        print(f"Target path {root_dir} not found in this git repository.", file=sys.stderr)
+        sys.exit(2)
 
     for path in list_paths(root_tree, root_dir):
-        if extensions:
-            if path.suffix not in extensions:
+        if exclude_extensions and len(exclude_extensions) > 0:
+            if path.suffix in exclude_extensions:
+                continue
+        elif include_extensions and len(include_extensions) > 0:
+            if path.suffix not in include_extensions:
                 continue
         relative_path = path.relative_to(root_dir)
-        add_to_tree(tree, relative_path)
+        logging.debug(f"path={path}, relative={relative_path}")
+        add_to_tree(tree, relative_path, root_dir)
     return tree
 
 
@@ -204,8 +252,8 @@ def process_tree(repo: git.Repo, tree: Tree, path: Path, since: Optional[str]) -
     :param since:
     :return:
     """
-    total_files = len(list(filter(lambda x: x.is_leaf(), tree.leaves(path))))
-
+    logging.info(f"process_tree(path={path}, since={since})")
+    total_files = len(list(filter(lambda x: x.is_leaf(), tree.leaves())))
     print(f"Generating stats for {repo.working_dir / path} with {total_files} files")
 
     progress = tqdm(total=total_files, desc="Overall Progress")
@@ -230,6 +278,7 @@ def process_tree_node(repo: git.Repo,
     :param counter:     a reference to the current progress/total processed files
     :return:            the generated final stats
     """
+    logging.info(f"process_tree_node({path})")
     node = tree.get_node(path)
     children = tree.children(path)
 
@@ -254,20 +303,31 @@ def process_tree_leaf(repo: git.Repo, path: Path, since: Optional[str]) -> Stats
     :param since:
     :return:
     """
-    git_path = shutil.which('git')
-    since_arg = f" --since={since} " if since else " "
-    git_blame = f"{git_path} -C {repo.working_dir} blame{since_arg}-w -M -C -C --line-porcelain -- {path}"
-    proc1 = subprocess.Popen(git_blame.split(' '), stdout=subprocess.PIPE)
-    out, err = proc1.communicate()
+
+    logging.info(f"process_tree_leaf(path={path})")
     count = dict()
-    for line in out.decode().splitlines():
-        match = re.match(BLAME_AUTHOR_EMAIL_PATTERN, line)
-        if match:
-            email = match.group(1).lower()
-            if email not in count:
-                count[email] = 1
-            else:
-                count[email] += 1
+
+    if not is_binary_file(repo.working_dir / path):
+        git_path = shutil.which('git')
+        since_arg = f" --since={since} " if since else " "
+        git_blame = f"{git_path} -C {repo.working_dir} blame{since_arg}-w -M -C -C --line-porcelain -- {path}"
+        proc1 = subprocess.Popen(git_blame.split(' '), stdout=subprocess.PIPE)
+        out, err = proc1.communicate()
+        try:
+            for line in out.decode().splitlines():
+                match = re.match(BLAME_AUTHOR_EMAIL_PATTERN, line)
+                if match:
+                    email = match.group(1).lower()
+                    if email not in count:
+                        count[email] = 1
+                    else:
+                        count[email] += 1
+        except UnicodeError as e:
+            # usually binary files
+            # logging.error(e)
+            print(f"{e} for {path}", file=sys.stderr)
+    else:
+        print(f"skipped {path}", file=sys.stderr)
     return Stats(path.name, count)
 
 
@@ -354,28 +414,41 @@ def create_report(tree: Tree, target_dir: Path, depth: int, output_filter: Outpu
 
 
 # noinspection PyShadowingNames
-def execute(repo_dir: Path, target_dir: Path, args: argparse.Namespace):
+def execute(repo_dir: Path,
+            target_dir: Path,
+            depth: int = -1,
+            output_filter: OutputFilter = OutputFilter.MIXED,
+            as_list: bool = False,
+            include_extensions: Optional[List[str]] = None,
+            exclude_extensions: Optional[List[str]] = None,
+            since: Optional[str] = None,
+            output: Optional[str] = None
+            ):
     """
     Execute the input arguments and generates the final report
-
-    :param repo_dir:    git repository root directory
-    :param target_dir:  optional path of the repository to parse (relative to repo_dir)
-    :param args:        input arguments
     """
-    output = args.output
+    logging.info(
+        f"execute(repo_dir={repo_dir}, target_dir={target_dir}, depth={depth}, output_filter={output_filter}, as_list={as_list}, "
+        f"include_extensions={include_extensions}, exclude_extensions={exclude_extensions}, since={since}, output={output})")
+
+    target_dir_absolute = repo_dir / target_dir
+
+    if not target_dir_absolute.exists():
+        print(f"Target path {target_dir} does not exists.", file=sys.stderr)
+        sys.exit(2)
+
+    if output_filter == OutputFilter.FILE:
+        as_list = True
 
     g = git.Repo(repo_dir)
-    tree = make_tree(g.head.commit.tree, target_dir, args.include_extensions)
-    subtree = tree.subtree(nid=target_dir)
-    leaves = len(list(subtree.filter_nodes(lambda x: x.is_leaf())))
-
-    process_tree(g, tree, target_dir, args.since)
+    tree = make_tree(g.head.commit.tree, target_dir, include_extensions, exclude_extensions)
+    process_tree(g, tree, target_dir, since)
     print()
 
     report = f'Final Report for `{repo_dir}`\n\n'
     report += f'Command line: `{" ".join(sys.argv)}`\n\n'
 
-    report += create_report(tree, target_dir, args.depth, args.filter, args.as_list, output is None)
+    report += create_report(tree, target_dir, depth, output_filter, as_list, output is None)
     report += '\n'
 
     if output:
@@ -402,10 +475,10 @@ def git_owners():
     parser.add_argument('-f', '--filter', type=str,
                         choices=[OutputFilter.FILE.value, OutputFilter.DIR.value, OutputFilter.MIXED.value],
                         default=OutputFilter.MIXED.value,
-                        help=f"""Filter the output based on the value given.
-                        {OutputFilter.FILE.value}: output files only (--as-list will be used in this case), 
-                        {OutputFilter.DIR.value}: output directories only, 
-                        {OutputFilter.MIXED.value}: output files and directories (default).""")
+                        help="Filter the output based on the value given."
+                             f"{OutputFilter.FILE.value}: output files only (--as-list will be used in this case),"
+                             f"{OutputFilter.DIR.value}: output directories only, "
+                             f"{OutputFilter.MIXED.value}: output files and directories (default).")
 
     parser.add_argument('--as-list', action='store_true', default=False,
                         help='Print results as a list instead of a tree. If --filter is not specified, mixed will be used.')
@@ -414,30 +487,46 @@ def git_owners():
                         help='Specifies the date range limit to use when executing git blame. date format is the same as used for '
                              'git blame --since')
 
-    parser.add_argument('--include-extensions', type=str, default=None,
+    parser.add_argument('--include-extensions', type=str, default='',
                         help="Comma separated extensions (ie. .py, .kt, .java). Specifies which file extensions to include while "
                              "parsing the repository")
 
+    parser.add_argument('--exclude-extensions', type=str, default='',
+                        help='Like for --include-extensions, but this will exclude the specified extensions. If specified, '
+                             '--include-extensions will be ignored')
+
     parser.add_argument('-o', '--output', required=False, default=None,
                         help='Save Report to file instead of printing to stdout')
+
+    parser.add_argument('--verbose', action='store_true', default=False,
+                        help='Turn on logging')
 
     parser.add_argument('repo', help='Repository root')
 
     args = parser.parse_args()
 
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+
     repo_dir = Path(args.repo)
+    target_dir = Path(args.path) if args.path is not None else Path('.')
+    output_filter = OutputFilter.value_of(args.filter)
 
-    if args.path is not None:
-        target_dir = Path(args.path)
-    else:
-        target_dir = Path('.')
+    # if specified, include_extensions will be ignored
+    if len(args.exclude_extensions) > 0:
+        args.include_extensions = ''
 
-    args.filter = OutputFilter.value_of(args.filter)
-
-    if args.filter == OutputFilter.FILE:
-        args.as_list = True
-
-    execute(repo_dir, target_dir, args)
+    execute(repo_dir=repo_dir,
+            target_dir=target_dir,
+            depth=args.depth,
+            output_filter=output_filter,
+            as_list=args.as_list,
+            include_extensions=list(
+                filter(lambda y: y and len(y) > 0, map(lambda x: x.strip(), args.include_extensions.split(',')))),
+            exclude_extensions=list(
+                filter(lambda y: y and len(y) > 0, map(lambda x: x.strip(), args.exclude_extensions.split(',')))),
+            since=args.since,
+            output=args.output)
 
 
 if __name__ == "__main__":

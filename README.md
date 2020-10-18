@@ -12,7 +12,16 @@ https://pypi.org/project/git-owners/
 ## Usage
 
 <pre>
-usage: git-owners [-h] [-p PATH] [-d DEPTH] [-f {file,dir,mixed}] [--as-list] [-s SINCE] [--include-extensions INCLUDE_EXTENSIONS] [-o OUTPUT] repo
+usage: git-owners [-h] 
+    [-p PATH] 
+    [-d DEPTH] 
+    [-f {file,dir,mixed}] 
+    [--as-list] [-s SINCE] 
+    [--include-extensions INCLUDE_EXTENSIONS] 
+    [--exclude-extensions EXCLUDE_EXTENSIONS] 
+    [-o OUTPUT] 
+    [--verbose] 
+    repo
 
 Print author owners statistics for a given git repo
 
@@ -31,9 +40,11 @@ optional arguments:
                         Specifies the date range limit to use when executing git blame. date format is the same as used for git blame --since
   --include-extensions INCLUDE_EXTENSIONS
                         Comma separated extensions (ie. .py, .kt, .java). Specifies which file extensions to include while parsing the repository
+  --exclude-extensions EXCLUDE_EXTENSIONS
+                        Like for --include-extensions, but this will exclude the specified extensions. If specified, --include-extensions will be ignored
   -o OUTPUT, --output OUTPUT
                         Save Report to file instead of printing to stdout
-
+  --verbose             Turn on logging
  </pre>
  
 ## Example
