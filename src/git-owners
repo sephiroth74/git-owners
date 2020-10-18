@@ -174,7 +174,7 @@ def is_binary_file(path: Path) -> bool:
 
 
 def add_to_tree(tree: Tree, path: Path, root_dir: Path):
-    logging.info(f"add_to_tree(path={path}, root_dir={root_dir})")
+    logging.info(f"add_to_tree path={path} root_dir={root_dir}")
     final_path = root_dir
     for i in range(0, len(path.parts)):
         final_path = final_path / path.parts[i]
@@ -185,7 +185,6 @@ def add_to_tree(tree: Tree, path: Path, root_dir: Path):
             parent = final_path.parent
         logging.debug(f"final_path={final_path}, parent={parent}")
         if not tree.contains(final_path):
-            logging.debug(f"create_node(name={name}, identifier={final_path})")
             tree.create_node(name, final_path, parent)
 
 
@@ -197,7 +196,6 @@ def list_paths(root_tree, path: Path):
 
 
 def get_git_tree(root_tree: git.objects.Tree, target_dir: Path) -> Optional[git.objects.Tree]:
-    logging.info(f'get_git_tree({root_tree.abspath}, {str(target_dir)})')
     try:
         return root_tree.join(str(target_dir))
     except KeyError:
@@ -217,8 +215,7 @@ def make_tree(root_tree: git.objects.Tree,
     :return:
     """
 
-    logging.info(f"make_tree(root_dir={root_dir}, include_extensions={include_extensions}, exclude_extensions={exclude_extensions})")
-    logging.debug(f"root_dir.name={root_dir.name}, root_dir.asbolute={root_dir.absolute()}, root_dir.str={str(root_dir)}")
+    logging.info(f"make tree, root_dir={root_dir}, include_extensions={include_extensions}, exclude_extensions={exclude_extensions})")
 
     tree = Tree()
     tree.create_node(root_dir.name, root_dir)
@@ -238,7 +235,7 @@ def make_tree(root_tree: git.objects.Tree,
             if path.suffix not in include_extensions:
                 continue
         relative_path = path.relative_to(root_dir)
-        logging.debug(f"path={path}, relative={relative_path}")
+        logging.debug(f"found path={path}, relative={relative_path}")
         add_to_tree(tree, relative_path, root_dir)
     return tree
 
@@ -252,7 +249,7 @@ def process_tree(repo: git.Repo, tree: Tree, path: Path, since: Optional[str]) -
     :param since:
     :return:
     """
-    logging.info(f"process_tree(path={path}, since={since})")
+    logging.info(f"process tree path={path}")
     total_files = len(list(filter(lambda x: x.is_leaf(), tree.leaves())))
     print(f"Generating stats for {repo.working_dir / path} with {total_files} files")
 
@@ -278,7 +275,7 @@ def process_tree_node(repo: git.Repo,
     :param counter:     a reference to the current progress/total processed files
     :return:            the generated final stats
     """
-    logging.info(f"process_tree_node({path})")
+    logging.info(f"process tree node path={path}")
     node = tree.get_node(path)
     children = tree.children(path)
 
@@ -304,7 +301,7 @@ def process_tree_leaf(repo: git.Repo, path: Path, since: Optional[str]) -> Stats
     :return:
     """
 
-    logging.info(f"process_tree_leaf(path={path})")
+    logging.info(f"process tree leaf path={path}")
     count = dict()
 
     if not is_binary_file(repo.working_dir / path):
@@ -427,9 +424,10 @@ def execute(repo_dir: Path,
     """
     Execute the input arguments and generates the final report
     """
-    logging.info(
-        f"execute(repo_dir={repo_dir}, target_dir={target_dir}, depth={depth}, output_filter={output_filter}, as_list={as_list}, "
-        f"include_extensions={include_extensions}, exclude_extensions={exclude_extensions}, since={since}, output={output})")
+    logging.info("execute:")
+    logging.debug(f"repo_dir={repo_dir}, target_dir={target_dir}, depth={depth}, output_filter={output_filter}, as_list={as_list}")
+    logging.debug(
+        f"include_extensions={include_extensions}, exclude_extensions={exclude_extensions}, since={since}, output={output}")
 
     target_dir_absolute = repo_dir / target_dir
 
